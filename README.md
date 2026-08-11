@@ -10,7 +10,9 @@
 | Controlled peak (TBU + prune + intensity) | **0.92 W** |
 | Thermal envelope | **4.0 W — respected** |
 | Intensity-cap design power | **2.8 W** |
+![TBU envelope proof curve](docs/envelope_curve.png)
 
+*Red: unconstrained · Green: controlled · Dashed: 4 W envelope*
 Reproduce:
 
     bash scripts/run_envelope_demo.sh
