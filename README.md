@@ -51,6 +51,7 @@ Together they form a closed control system: load rises → power approaches the 
 
 ```bash
 cd python
+
 PYTHONPATH=. python3 cosim/harness.py
 python/
   tbu/           continuous boundary mathematics
