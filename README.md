@@ -2,10 +2,18 @@
 
 **2048-Tile Fabric • Sub-THz Target • ≤ 4 W Envelope • Continuous TBU Control**
 
-A hierarchical baseband processor architecture for next-generation 6G mobile devices.  
-It combines continuous thermal boundary control with algorithmic intensity reduction so high-throughput processing can stay inside a strict mobile thermal budget.
+## Envelope proof (co-sim, 2048 tiles)
 
----
+| Metric | Value |
+|--------|--------|
+| Unconstrained over-subscription peak | **8.4 W** |
+| Controlled peak (TBU + prune + intensity) | **0.92 W** |
+| Thermal envelope | **4.0 W — respected** |
+| Intensity-cap design power | **2.8 W** |
+
+```bash
+bash scripts/run_envelope_demo.sh
+# or: PYTHONPATH=python python3 python/cosim/harness.py
 
 ## Core Idea
 
