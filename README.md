@@ -11,7 +11,7 @@
 | Thermal envelope | **4.0 W — respected** |
 | Intensity-cap design power | **2.8 W** |
 
-![TBU envelope proof curve](docs/envelope_curve.png)
+![TBU envelope proof curve](docs/envelope_curve.svg)
 
 *Red: unconstrained · Green: controlled · Dashed: 4 W envelope*
 Reproduce:
