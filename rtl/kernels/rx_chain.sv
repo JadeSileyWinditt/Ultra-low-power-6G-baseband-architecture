@@ -1,21 +1,20 @@
 //==============================================================================
-// rx_chain.sv – OFDM receive path with 2×2 MIMO + polar decode
+// tx_chain.sv – Transmit path: polar encode → constellation map → IFFT
 //
-//   time-domain (2 antennas) → dual FFT pipelines → per-SC MIMO ZF detect
-//   → dual soft demap → polar decoder (N=8, K=4)
-//
-// All stages respect TBU pruning / approx_en.
-// Full per-SC MIMO array is generated; H is shared across SCs for the
-// behavioural scale (real design would stream per-RE CSI).
+// Channel coding (polar N=16, K=8 + CRC-4) sits in front of the mapper so
+// that the whole TX pipeline remains under TBU approx / prune control.
+// 16 coded bits map onto 8 QPSK symbols (2 bits per SC).
 //==============================================================================
 
 `timescale 1ns / 1ps
 
-module rx_chain #(
+module tx_chain #(
   parameter int WIDTH         = 16,
   parameter int N_BUTTERFLIES = 4,
   parameter int N_STAGES      = 3,
-  parameter int N_SC          = 8
+  parameter int N_SC          = 8,
+  parameter int K_INFO        = 8,
+  parameter int N_POLAR       = 16
 ) (
   input  logic                       clk,
   input  logic                       rst_n,
@@ -25,174 +24,107 @@ module rx_chain #(
   input  logic [1:0]                 prune_level,
 
   input  logic                       in_valid,
-  // Antenna 0 time-domain
-  input  logic [WIDTH-1:0]           in_re  [N_SC],
-  input  logic [WIDTH-1:0]           in_im  [N_SC],
-  // Antenna 1 time-domain
-  input  logic [WIDTH-1:0]           in_re_a1 [N_SC],
-  input  logic [WIDTH-1:0]           in_im_a1 [N_SC],
-
+  // Information bits (packed).  Lower 4 bits used as payload; CRC is
+  // computed inside the encoder.
+  input  logic [1:0]                 bits   [N_SC],
   input  logic [WIDTH-1:0]           tw_re  [N_STAGES][N_BUTTERFLIES],
   input  logic [WIDTH-1:0]           tw_im  [N_STAGES][N_BUTTERFLIES],
 
-  // Per-subcarrier single-stream channel (legacy / fallback path)
-  input  logic [WIDTH-1:0]           h_re   [N_SC],
-  input  logic [WIDTH-1:0]           h_im   [N_SC],
-
-  // 2×2 channel matrix (shared across SCs for stub scale)
-  input  logic [WIDTH-1:0]           h00_re, h00_im, h01_re, h01_im,
-  input  logic [WIDTH-1:0]           h10_re, h10_im, h11_re, h11_im,
-
   output logic                       out_valid,
-  // Soft LLRs for two spatial streams
-  output logic [WIDTH-1:0]           llr0   [N_SC],
-  output logic [WIDTH-1:0]           llr1   [N_SC],
-  // Polar decoded information bits (K=4)
-  output logic [3:0]                 decoded_bits,
-  output logic                       decode_valid
+  output logic [WIDTH-1:0]           out_re [N_SC],
+  output logic [WIDTH-1:0]           out_im [N_SC]
 );
 
   //--------------------------------------------------------------------------
-  // Dual FFT → EQ (symbol_chain) – one per antenna
+  // Pack payload bits (encoder adds CRC-4 itself)
   //--------------------------------------------------------------------------
-  logic                 sym0_valid, sym1_valid;
-  logic [WIDTH-1:0]     y0_re [N_SC], y0_im [N_SC];
-  logic [WIDTH-1:0]     y1_re [N_SC], y1_im [N_SC];
+  logic [K_INFO-1:0] info;
+  always_comb begin
+    info = '0;
+    info[0] = bits[0][0];
+    info[1] = bits[1][0];
+    info[2] = bits[2][0];
+    info[3] = bits[3][0];
+    // upper nibble left 0 – encoder fills CRC
+  end
 
-  symbol_chain #(
-    .WIDTH(WIDTH), .N_BUTTERFLIES(N_BUTTERFLIES),
-    .N_STAGES(N_STAGES), .N_SC(N_SC)
-  ) u_symbol0 (
+  //--------------------------------------------------------------------------
+  // Polar encoder (N=16, K=8)
+  //--------------------------------------------------------------------------
+  logic                 enc_valid;
+  logic [N_POLAR-1:0]   coded;
+
+  polar_encoder #(
+    .N(N_POLAR), .K(K_INFO)
+  ) u_enc (
     .clk(clk), .rst_n(rst_n),
     .approx_en(approx_en),
     .skip_noncritical(skip_noncritical),
-    .prune_level(prune_level),
     .in_valid(in_valid),
-    .in_re(in_re), .in_im(in_im),
-    .tw_re(tw_re), .tw_im(tw_im),
-    .h_re(h_re), .h_im(h_im),
-    .out_valid(sym0_valid),
-    .x_re(y0_re), .x_im(y0_im)
+    .info_bits(info),
+    .out_valid(enc_valid),
+    .coded_bits(coded)
   );
 
-  // Antenna-1 path: same H vector is acceptable for the intensity demo;
-  // a production design would carry a second CSI stream.
-  symbol_chain #(
-    .WIDTH(WIDTH), .N_BUTTERFLIES(N_BUTTERFLIES),
-    .N_STAGES(N_STAGES), .N_SC(N_SC)
-  ) u_symbol1 (
-    .clk(clk), .rst_n(rst_n),
-    .approx_en(approx_en),
-    .skip_noncritical(skip_noncritical),
-    .prune_level(prune_level),
-    .in_valid(in_valid),
-    .in_re(in_re_a1), .in_im(in_im_a1),
-    .tw_re(tw_re), .tw_im(tw_im),
-    .h_re(h_re), .h_im(h_im),
-    .out_valid(sym1_valid),
-    .x_re(y1_re), .x_im(y1_im)
-  );
-
-  //--------------------------------------------------------------------------
-  // Per-SC 2×2 MIMO detect (generated)
-  //--------------------------------------------------------------------------
-  logic                 mimo_fire;
-  assign mimo_fire = sym0_valid & sym1_valid & ~skip_noncritical;
-
-  logic                 mimo_valid [N_SC];
-  logic [WIDTH-1:0]     x0_re [N_SC], x0_im [N_SC];
-  logic [WIDTH-1:0]     x1_re [N_SC], x1_im [N_SC];
-
-  genvar gi;
-  generate
-    for (gi = 0; gi < N_SC; gi++) begin : g_mimo
-      mimo_detect #(.WIDTH(WIDTH)) u_mimo (
-        .clk(clk), .rst_n(rst_n),
-        .approx_en(approx_en),
-        .in_valid(mimo_fire),
-        .y0_re(y0_re[gi]), .y0_im(y0_im[gi]),
-        .y1_re(y1_re[gi]), .y1_im(y1_im[gi]),
-        .h00_re(h00_re), .h00_im(h00_im),
-        .h01_re(h01_re), .h01_im(h01_im),
-        .h10_re(h10_re), .h10_im(h10_im),
-        .h11_re(h11_re), .h11_im(h11_im),
-        .out_valid(mimo_valid[gi]),
-        .x0_re(x0_re[gi]), .x0_im(x0_im[gi]),
-        .x1_re(x1_re[gi]), .x1_im(x1_im[gi])
-      );
-    end
-  endgenerate
-
-  logic any_mimo_valid;
-  assign any_mimo_valid = mimo_valid[0];   // all fire together
-
-  //--------------------------------------------------------------------------
-  // Soft demap both spatial streams
-  //--------------------------------------------------------------------------
-  logic demap0_valid, demap1_valid;
-  logic [WIDTH-1:0] llr0_s0 [N_SC], llr1_s0 [N_SC];
-  logic [WIDTH-1:0] llr0_s1 [N_SC], llr1_s1 [N_SC];
-
-  soft_demap #(.WIDTH(WIDTH), .N_SC(N_SC)) u_demap0 (
-    .clk(clk), .rst_n(rst_n),
-    .approx_en(approx_en),
-    .in_valid(any_mimo_valid),
-    .x_re(x0_re), .x_im(x0_im),
-    .out_valid(demap0_valid),
-    .llr0(llr0_s0), .llr1(llr1_s0)
-  );
-
-  soft_demap #(.WIDTH(WIDTH), .N_SC(N_SC)) u_demap1 (
-    .clk(clk), .rst_n(rst_n),
-    .approx_en(approx_en),
-    .in_valid(any_mimo_valid),
-    .x_re(x1_re), .x_im(x1_im),
-    .out_valid(demap1_valid),
-    .llr0(llr0_s1), .llr1(llr1_s1)
-  );
-
-  //--------------------------------------------------------------------------
-  // Polar decoder (operates on stream-0 LLRs for the behavioural stub)
-  //--------------------------------------------------------------------------
-  logic [WIDTH-1:0] dec_llr [N_SC];
+  // Map 16 coded bits onto 8 QPSK symbols (2 bits per SC)
+  logic [1:0] map_bits [N_SC];
   always_comb begin
     for (int i = 0; i < N_SC; i++)
-      dec_llr[i] = llr0_s0[i];
+      map_bits[i] = {coded[2*i+1], coded[2*i]};
   end
 
-  polar_decoder #(
-    .WIDTH(WIDTH), .N(N_SC), .K(4)
-  ) u_dec (
+  //--------------------------------------------------------------------------
+  // Constellation map
+  //--------------------------------------------------------------------------
+  logic                 map_valid;
+  logic [WIDTH-1:0]     s_re [N_SC];
+  logic [WIDTH-1:0]     s_im [N_SC];
+
+  constellation_map #(
+    .WIDTH(WIDTH), .N_SC(N_SC)
+  ) u_map (
     .clk(clk), .rst_n(rst_n),
     .approx_en(approx_en),
-    .skip_noncritical(skip_noncritical),
-    .in_valid(demap0_valid & ~skip_noncritical),
-    .llr(dec_llr),
-    .out_valid(decode_valid),
-    .info_bits(decoded_bits),
-    .info_llr()   // unused for now
+    .in_valid(enc_valid),
+    .bits(map_bits),
+    .out_valid(map_valid),
+    .s_re(s_re), .s_im(s_im)
   );
 
   //--------------------------------------------------------------------------
-  // Output mux: under skip_noncritical fall back to single-stream EQ path
-  // (stream-0 LLRs only) so the control loop can still prune the MIMO stage.
+  // IFFT (reuse OFDM pipeline)
   //--------------------------------------------------------------------------
+  logic fft_in_valid;
+  assign fft_in_valid = map_valid & ~skip_noncritical;
+
+  logic                 fft_valid;
+  logic [WIDTH-1:0]     fft_re [N_SC];
+  logic [WIDTH-1:0]     fft_im [N_SC];
+
+  ofdm_fft_pipeline #(
+    .WIDTH(WIDTH), .N_BUTTERFLIES(N_BUTTERFLIES), .N_STAGES(N_STAGES)
+  ) u_ifft (
+    .clk(clk), .rst_n(rst_n),
+    .approx_en(approx_en),
+    .skip_noncritical(1'b0),
+    .prune_level(prune_level),
+    .in_valid(fft_in_valid),
+    .in_re(s_re), .in_im(s_im),
+    .tw_re(tw_re), .tw_im(tw_im),
+    .out_valid(fft_valid),
+    .out_re(fft_re), .out_im(fft_im)
+  );
+
   always_comb begin
     if (skip_noncritical) begin
-      out_valid = sym0_valid;
-      // Pass-through crude LLRs from antenna-0 EQ symbols
-      for (int i = 0; i < N_SC; i++) begin
-        llr0[i] = y0_re[i];
-        llr1[i] = y0_im[i];
-      end
+      out_valid = map_valid;
+      out_re    = s_re;
+      out_im    = s_im;
     end else begin
-      out_valid = demap0_valid & demap1_valid;
-      // Pack stream-0 and stream-1 LLRs (bit0 of each stream into llr0/llr1)
-      for (int i = 0; i < N_SC; i++) begin
-        llr0[i] = llr0_s0[i];
-        llr1[i] = llr0_s1[i];
-      end
+      out_valid = fft_valid;
+      out_re    = fft_re;
+      out_im    = fft_im;
     end
   end
 
-endmodule : rx_chain
+endmodule : tx_chain
