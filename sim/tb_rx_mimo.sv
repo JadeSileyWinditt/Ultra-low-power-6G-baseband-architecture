@@ -22,11 +22,14 @@ module tb_rx_mimo;
   logic [W-1:0] in_re_a1 [N_SC], in_im_a1 [N_SC];
   logic [W-1:0] tw_re [N_ST][N_BF], tw_im [N_ST][N_BF];
   logic [W-1:0] h_re [N_SC], h_im [N_SC];
-  logic [W-1:0] h00_re, h00_im, h01_re, h01_im;
-  logic [W-1:0] h10_re, h10_im, h11_re, h11_im;
+  logic [W-1:0] h00_re [N_SC], h00_im [N_SC];
+  logic [W-1:0] h01_re [N_SC], h01_im [N_SC];
+  logic [W-1:0] h10_re [N_SC], h10_im [N_SC];
+  logic [W-1:0] h11_re [N_SC], h11_im [N_SC];
   logic [W-1:0] llr0 [N_SC], llr1 [N_SC];
-  logic [3:0]   decoded_bits;
+  logic [7:0]   decoded_bits;
   logic         decode_valid;
+  logic         crc_ok;
 
   rx_chain #(
     .WIDTH(W), .N_BUTTERFLIES(N_BF), .N_STAGES(N_ST), .N_SC(N_SC)
@@ -46,7 +49,7 @@ module tb_rx_mimo;
     .h11_re(h11_re), .h11_im(h11_im),
     .out_valid(out_valid),
     .llr0(llr0), .llr1(llr1),
-    .decoded_bits(decoded_bits), .decode_valid(decode_valid)
+    .decoded_bits(decoded_bits), .decode_valid(decode_valid), .crc_ok(crc_ok)
   );
 
   integer i, s;
@@ -58,16 +61,16 @@ module tb_rx_mimo;
       in_re[i]    = 16'h0120 + i*5; in_im[i]    = 16'h0030 + i*2;
       in_re_a1[i] = 16'h00E0 + i*3; in_im_a1[i] = 16'h0028 + i;
       h_re[i] = 16'h00A0; h_im[i] = 16'h0020;
+      // Per-SC 2×2 channel (mild frequency selectivity)
+      h00_re[i] = 16'h00C0 + i; h00_im[i] = 16'h0010;
+      h01_re[i] = 16'h0040;     h01_im[i] = 16'h0020;
+      h10_re[i] = 16'h0030;     h10_im[i] = 16'h0018;
+      h11_re[i] = 16'h00B0 - i; h11_im[i] = 16'h0008;
     end
     for (s = 0; s < N_ST; s++)
       for (i = 0; i < N_BF; i++) begin
         tw_re[s][i] = 16'h00C0; tw_im[s][i] = 16'h0018;
       end
-
-    h00_re = 16'h00C0; h00_im = 16'h0010;
-    h01_re = 16'h0040; h01_im = 16'h0020;
-    h10_re = 16'h0030; h10_im = 16'h0018;
-    h11_re = 16'h00B0; h11_im = 16'h0008;
 
     repeat (12) @(posedge clk);
     rst_n = 1;
