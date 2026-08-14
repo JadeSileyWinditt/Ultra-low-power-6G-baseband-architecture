@@ -25,6 +25,8 @@ module tb_rx_mimo;
   logic [W-1:0] h00_re, h00_im, h01_re, h01_im;
   logic [W-1:0] h10_re, h10_im, h11_re, h11_im;
   logic [W-1:0] llr0 [N_SC], llr1 [N_SC];
+  logic [3:0]   decoded_bits;
+  logic         decode_valid;
 
   rx_chain #(
     .WIDTH(W), .N_BUTTERFLIES(N_BF), .N_STAGES(N_ST), .N_SC(N_SC)
@@ -43,7 +45,8 @@ module tb_rx_mimo;
     .h10_re(h10_re), .h10_im(h10_im),
     .h11_re(h11_re), .h11_im(h11_im),
     .out_valid(out_valid),
-    .llr0(llr0), .llr1(llr1)
+    .llr0(llr0), .llr1(llr1),
+    .decoded_bits(decoded_bits), .decode_valid(decode_valid)
   );
 
   integer i, s;
