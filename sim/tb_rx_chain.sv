@@ -18,9 +18,14 @@ module tb_rx_chain;
   logic [1:0] prune_level;
   logic in_valid, out_valid;
   logic [W-1:0] in_re [N_SC], in_im [N_SC];
+  logic [W-1:0] in_re_a1 [N_SC], in_im_a1 [N_SC];
   logic [W-1:0] tw_re [N_ST][N_BF], tw_im [N_ST][N_BF];
   logic [W-1:0] h_re [N_SC], h_im [N_SC];
+  logic [W-1:0] h00_re, h00_im, h01_re, h01_im;
+  logic [W-1:0] h10_re, h10_im, h11_re, h11_im;
   logic [W-1:0] llr0 [N_SC], llr1 [N_SC];
+  logic [3:0]   decoded_bits;
+  logic         decode_valid;
 
   rx_chain #(
     .WIDTH(W), .N_BUTTERFLIES(N_BF), .N_STAGES(N_ST), .N_SC(N_SC)
@@ -29,8 +34,14 @@ module tb_rx_chain;
     .approx_en(approx_en), .skip_noncritical(skip_noncritical),
     .prune_level(prune_level),
     .in_valid(in_valid), .in_re(in_re), .in_im(in_im),
+    .in_re_a1(in_re_a1), .in_im_a1(in_im_a1),
     .tw_re(tw_re), .tw_im(tw_im), .h_re(h_re), .h_im(h_im),
-    .out_valid(out_valid), .llr0(llr0), .llr1(llr1)
+    .h00_re(h00_re), .h00_im(h00_im),
+    .h01_re(h01_re), .h01_im(h01_im),
+    .h10_re(h10_re), .h10_im(h10_im),
+    .h11_re(h11_re), .h11_im(h11_im),
+    .out_valid(out_valid), .llr0(llr0), .llr1(llr1),
+    .decoded_bits(decoded_bits), .decode_valid(decode_valid)
   );
 
   integer i, s;
@@ -38,17 +49,22 @@ module tb_rx_chain;
     rst_n = 0;
     approx_en = 0; skip_noncritical = 0; prune_level = 0; in_valid = 0;
     for (i = 0; i < N_SC; i++) begin
-      in_re[i] = 16'h0120 + i*5; in_im[i] = 16'h0030 + i*2;
+      in_re[i]    = 16'h0120 + i*5; in_im[i]    = 16'h0030 + i*2;
+      in_re_a1[i] = 16'h00E0 + i*3; in_im_a1[i] = 16'h0028 + i;
       h_re[i] = 16'h00A0; h_im[i] = 16'h0020;
     end
     for (s = 0; s < N_ST; s++)
       for (i = 0; i < N_BF; i++) begin
         tw_re[s][i] = 16'h00C0; tw_im[s][i] = 16'h0018;
       end
+    h00_re = 16'h00C0; h00_im = 16'h0010;
+    h01_re = 16'h0040; h01_im = 16'h0020;
+    h10_re = 16'h0030; h10_im = 16'h0018;
+    h11_re = 16'h00B0; h11_im = 16'h0008;
 
     repeat (12) @(posedge clk); rst_n = 1; repeat (4) @(posedge clk);
 
-    $display("=== Full RX Chain (FFT→EQ→Demap) ===");
+    $display("=== Full RX Chain (dual-FFT → 2×2 ZF MIMO → Demap) ===");
     $display("mode       approx  skip  prune  valid  llr0[0]");
 
     approx_en = 0; skip_noncritical = 0; prune_level = 0;
