@@ -105,8 +105,9 @@ Requires: Python 3.10+, numpy (`pip install -r requirements.txt`).
 
 ## Status
 
-Working hierarchical RTL and software twin demonstrating the closed thermal/intensity control loop, with a full minimal TX/RX PHY path under TBU control.
+Working hierarchical RTL and software twin demonstrating the closed thermal/intensity control loop, with a full TX/RX PHY path (2×2 ZF MIMO + polar coding) under TBU control. Envelope proof: 8.4 W unconstrained → 0.92 W controlled.
 
+Next: optional memory-energy term, then larger NUM_TILES elaboration.
 Next: expand MIMO into the RX chain, optional memory-energy term in the model, channel-coding stub, then larger NUM_TILES elaboration.
 
 ---
