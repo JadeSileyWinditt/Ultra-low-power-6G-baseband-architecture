@@ -60,6 +60,20 @@ module phy_tile #(
   logic [WIDTH-1:0] rx_llr0 [N_SC], rx_llr1 [N_SC];
   logic [WIDTH-1:0] tx_re [N_SC], tx_im [N_SC];
 
+  // Default 2nd-antenna and 2×2 H for behavioural PHY tile
+  // (full multi-antenna CSI ports can be promoted later)
+  logic [WIDTH-1:0] in_re_a1 [N_SC], in_im_a1 [N_SC];
+  always_comb begin
+    for (int i = 0; i < N_SC; i++) begin
+      in_re_a1[i] = '0;
+      in_im_a1[i] = '0;
+    end
+  end
+  localparam logic [WIDTH-1:0] H00_RE = 16'h0100, H00_IM = 16'h0000;
+  localparam logic [WIDTH-1:0] H01_RE = 16'h0000, H01_IM = 16'h0000;
+  localparam logic [WIDTH-1:0] H10_RE = 16'h0000, H10_IM = 16'h0000;
+  localparam logic [WIDTH-1:0] H11_RE = 16'h0100, H11_IM = 16'h0000;
+
   rx_chain #(
     .WIDTH(WIDTH), .N_BUTTERFLIES(N_BUTTERFLIES),
     .N_STAGES(N_STAGES), .N_SC(N_SC)
@@ -69,9 +83,15 @@ module phy_tile #(
     .prune_level(prune_level),
     .in_valid(in_valid & ~mode_tx),
     .in_re(in_re), .in_im(in_im),
+    .in_re_a1(in_re_a1), .in_im_a1(in_im_a1),
     .tw_re(tw_re), .tw_im(tw_im),
     .h_re(h_re), .h_im(h_im),
-    .out_valid(rx_valid), .llr0(rx_llr0), .llr1(rx_llr1)
+    .h00_re(H00_RE), .h00_im(H00_IM),
+    .h01_re(H01_RE), .h01_im(H01_IM),
+    .h10_re(H10_RE), .h10_im(H10_IM),
+    .h11_re(H11_RE), .h11_im(H11_IM),
+    .out_valid(rx_valid), .llr0(rx_llr0), .llr1(rx_llr1),
+    .decoded_bits(), .decode_valid()
   );
 
   tx_chain #(
