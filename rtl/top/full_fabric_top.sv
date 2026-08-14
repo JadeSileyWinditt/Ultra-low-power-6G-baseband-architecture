@@ -11,7 +11,7 @@
 import tbu_params_pkg::*;
 
 module full_fabric_top #(
-  parameter int NUM_TILES        = 32,     // ← set to 2048 for full elaboration
+  parameter int NUM_TILES        = 64,     // raise toward 2048; hierarchy is identical  // ← set to 2048 for full elaboration
   parameter int TILES_PER_SLICE  = 8,
   parameter int N_REGIONS        = 4,
   parameter int ALU_WIDTH        = 16,
