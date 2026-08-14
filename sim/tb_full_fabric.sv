@@ -25,7 +25,7 @@ module tb_full_fabric;
   logic        global_envelope_alarm, any_fft_valid;
 
   full_fabric_top #(
-    .NUM_TILES       (16),          // raise toward 2048 when ready
+    .NUM_TILES       (64),     // hierarchy scales to 2048; 64 for sim speed   // raise toward 2048 when ready
     .TILES_PER_SLICE (8),
     .N_REGIONS       (4),
     .ALU_WIDTH       (W),
