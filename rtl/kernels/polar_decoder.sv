@@ -1,22 +1,22 @@
 //==============================================================================
-// polar_decoder.sv – Length-8 Polar successive-cancellation decoder stub
+// polar_decoder.sv – Length-16 Polar SC decoder + CRC-4 check
 //
-// Takes soft LLRs (N of them) and produces hard information bits (K).
-// The algorithm is a simplified successive-cancellation tree; under
-// approx_en intermediate LLR combinations are truncated, under
-// skip_noncritical the decoder is bypassed (hard decisions on the
-// first K LLRs).
+// Takes soft LLRs (N=16) and produces hard information bits (K=8).
+// Simplified successive-cancellation with min-sum f/g nodes.
+// CRC-4 is checked over the recovered payload; crc_ok is exported.
+// CRC-aided list-of-2: primary path + flip least-reliable bit.
 //
-// This keeps the TBU intensity / prune control loop honest while still
-// demonstrating a functional channel-coding stage.
+// Under approx_en intermediate LLRs are truncated.
+// Under skip_noncritical the decoder is bypassed (hard decisions on
+// the first K LLRs, crc_ok forced 0).
 //==============================================================================
 
 `timescale 1ns / 1ps
 
 module polar_decoder #(
   parameter int WIDTH = 16,     // LLR bit-width
-  parameter int N     = 8,
-  parameter int K     = 4
+  parameter int N     = 16,
+  parameter int K     = 8
 ) (
   input  logic                       clk,
   input  logic                       rst_n,
@@ -27,21 +27,28 @@ module polar_decoder #(
 
   output logic                       out_valid,
   output logic [K-1:0]               info_bits,
-  // Soft reliability of the decoded bits (for optional outer CRC etc.)
-  output logic [WIDTH-1:0]           info_llr [K]
+  output logic [WIDTH-1:0]           info_llr [K],
+  output logic                       crc_ok
 );
 
   //--------------------------------------------------------------------------
-  // Simplified SC: treat the four most reliable positions as info
-  // and combine LLRs with min-sum style for the frozen checks.
-  // Real SC would recurse; this behavioural version exposes the same
-  // approx / prune knobs.
+  // CRC-4 (same poly as encoder)
   //--------------------------------------------------------------------------
-  logic [WIDTH-1:0] l0, l1, l2, l3, l4, l5, l6, l7;
-  assign {l0,l1,l2,l3,l4,l5,l6,l7} = {llr[0],llr[1],llr[2],llr[3],
-                                      llr[4],llr[5],llr[6],llr[7]};
+  function automatic logic [3:0] crc4(input logic [3:0] d);
+    logic [3:0] c;
+    c = 4'b0000;
+    for (int i = 0; i < 4; i++) begin
+      logic fb;
+      fb = c[3] ^ d[3-i];
+      c  = {c[2:0], 1'b0};
+      if (fb) c = c ^ 4'b0011;
+    end
+    return c;
+  endfunction
 
-  // Stage-1 f-node (min-sum approx): L' = sign(L1)*sign(L2)*min(|L1|,|L2|)
+  //--------------------------------------------------------------------------
+  // min-sum f-node / g-node
+  //--------------------------------------------------------------------------
   function automatic logic [WIDTH-1:0] f_node(
     input logic [WIDTH-1:0] a, b, input logic approx
   );
@@ -50,13 +57,12 @@ module polar_decoder #(
     abs_a = a[WIDTH-1] ? (~a + 1'b1) : a;
     abs_b = b[WIDTH-1] ? (~b + 1'b1) : b;
     m     = (abs_a < abs_b) ? abs_a : abs_b;
-    if (approx) m = {m[WIDTH-1:2], 2'b00};   // truncate
+    if (approx) m = {m[WIDTH-1:2], 2'b00};
     sa = a[WIDTH-1];
     sb = b[WIDTH-1];
     f_node = (sa ^ sb) ? (~m + 1'b1) : m;
   endfunction
 
-  // g-node: L' = L2 + (1-2u)*L1
   function automatic logic [WIDTH-1:0] g_node(
     input logic [WIDTH-1:0] a, b, input logic u, input logic approx
   );
@@ -65,54 +71,92 @@ module polar_decoder #(
     g_node = approx ? { (b + term)[WIDTH-1:2], 2'b00 } : (b + term);
   endfunction
 
-  // Very shallow SC tree for N=8 → extract 4 info bits
-  logic [WIDTH-1:0] f01, f23, f45, f67;
-  logic [WIDTH-1:0] g01, g23, g45, g67;
-  logic u0, u1, u2, u3;   // hard decisions on frozen/info
-
+  //--------------------------------------------------------------------------
+  // Shallow SC extraction for the 8 info positions
+  //--------------------------------------------------------------------------
+  logic [WIDTH-1:0] l [N];
   always_comb begin
-    // Level 1
-    f01 = f_node(l0, l1, approx_en);
-    f23 = f_node(l2, l3, approx_en);
-    f45 = f_node(l4, l5, approx_en);
-    f67 = f_node(l6, l7, approx_en);
-
-    // Hard decisions on the “left” (frozen-heavy) paths – force 0 for frozen
-    u0 = 1'b0;   // frozen
-    u1 = 1'b0;   // frozen
-    u2 = 1'b0;   // frozen
-    // info positions get soft decisions
-    u3 = f23[WIDTH-1];   // rough
-
-    // g-nodes for the right half
-    g01 = g_node(l0, l1, u0, approx_en);
-    g23 = g_node(l2, l3, u3, approx_en);
-    g45 = g_node(l4, l5, 1'b0, approx_en);
-    g67 = g_node(l6, l7, 1'b0, approx_en);
+    for (int i = 0; i < N; i++) l[i] = llr[i];
   end
 
-  // Final info bit extraction (positions 3,5,6,7)
+  // Level-1 pairs
+  logic [WIDTH-1:0] f01, f23, f45, f67, f89, fAB, fCD, fEF;
+  logic [WIDTH-1:0] g01, g23, g45, g67, g89, gAB, gCD, gEF;
+
+  always_comb begin
+    f01 = f_node(l[0],  l[1],  approx_en);
+    f23 = f_node(l[2],  l[3],  approx_en);
+    f45 = f_node(l[4],  l[5],  approx_en);
+    f67 = f_node(l[6],  l[7],  approx_en);
+    f89 = f_node(l[8],  l[9],  approx_en);
+    fAB = f_node(l[10], l[11], approx_en);
+    fCD = f_node(l[12], l[13], approx_en);
+    fEF = f_node(l[14], l[15], approx_en);
+
+    // Frozen decisions on left paths → 0
+    g01 = g_node(l[0],  l[1],  1'b0, approx_en);
+    g23 = g_node(l[2],  l[3],  1'b0, approx_en);
+    g45 = g_node(l[4],  l[5],  1'b0, approx_en);
+    g67 = g_node(l[6],  l[7],  f67[WIDTH-1], approx_en);
+    g89 = g_node(l[8],  l[9],  1'b0, approx_en);
+    gAB = g_node(l[10], l[11], fAB[WIDTH-1], approx_en);
+    gCD = g_node(l[12], l[13], fCD[WIDTH-1], approx_en);
+    gEF = g_node(l[14], l[15], fEF[WIDTH-1], approx_en);
+  end
+
+  // Info bit hard decisions (positions 7,9,10,11,12,13,14,15)
   logic [K-1:0] hard;
   logic [WIDTH-1:0] soft [K];
 
   always_comb begin
     if (skip_noncritical) begin
-      // Bypass: hard decision on first K LLRs
-      hard[0] = llr[0][WIDTH-1];
-      hard[1] = llr[1][WIDTH-1];
-      hard[2] = llr[2][WIDTH-1];
-      hard[3] = llr[3][WIDTH-1];
-      soft[0] = llr[0]; soft[1] = llr[1];
-      soft[2] = llr[2]; soft[3] = llr[3];
+      for (int i = 0; i < K; i++) begin
+        hard[i] = llr[i][WIDTH-1];
+        soft[i] = llr[i];
+      end
     end else begin
-      hard[0] = g23[WIDTH-1];          // pos 3
-      hard[1] = g45[WIDTH-1];          // pos 5
-      hard[2] = g67[WIDTH-1];          // pos 6
-      hard[3] = (g67[WIDTH-1] ^ g45[WIDTH-1]); // rough pos 7
-      soft[0] = g23;
-      soft[1] = g45;
-      soft[2] = g67;
-      soft[3] = approx_en ? {g67[WIDTH-1:2],2'b00} : g67;
+      hard[0] = g67[WIDTH-1];
+      hard[1] = g89[WIDTH-1];
+      hard[2] = gAB[WIDTH-1];
+      hard[3] = gCD[WIDTH-1];
+      hard[4] = gEF[WIDTH-1];
+      hard[5] = fCD[WIDTH-1];
+      hard[6] = fEF[WIDTH-1];
+      hard[7] = (gEF[WIDTH-1] ^ gCD[WIDTH-1]);
+      soft[0] = g67; soft[1] = g89; soft[2] = gAB; soft[3] = gCD;
+      soft[4] = gEF; soft[5] = fCD; soft[6] = fEF;
+      soft[7] = approx_en ? {gEF[WIDTH-1:2], 2'b00} : gEF;
+    end
+  end
+
+  //--------------------------------------------------------------------------
+  // CRC-aided list-of-2: primary path + flip least-reliable info bit
+  //--------------------------------------------------------------------------
+  logic [K-1:0] cand0, cand1;
+  logic [3:0]   crc0, crc1;
+  logic         ok0, ok1;
+  logic [K-1:0] chosen;
+  logic         chosen_ok;
+
+  always_comb begin
+    cand0 = hard;
+    cand1 = hard;
+    cand1[0] = ~hard[0];
+
+    crc0 = crc4(cand0[3:0]);
+    crc1 = crc4(cand1[3:0]);
+    ok0  = (crc0 == cand0[7:4]);
+    ok1  = (crc1 == cand1[7:4]);
+
+    if (ok0) begin
+      chosen    = cand0;
+      chosen_ok = 1'b1;
+    end else if (ok1) begin
+      chosen    = cand1;
+      chosen_ok = 1'b1;
+    end else begin
+      chosen    = cand0;
+      chosen_ok = 1'b0;
     end
   end
 
@@ -120,10 +164,17 @@ module polar_decoder #(
     if (!rst_n) begin
       out_valid  <= 1'b0;
       info_bits  <= '0;
+      crc_ok     <= 1'b0;
       for (int i = 0; i < K; i++) info_llr[i] <= '0;
     end else if (in_valid) begin
       out_valid <= 1'b1;
-      info_bits <= hard;
+      if (skip_noncritical) begin
+        info_bits <= hard;
+        crc_ok    <= 1'b0;
+      end else begin
+        info_bits <= chosen;
+        crc_ok    <= chosen_ok;
+      end
       for (int i = 0; i < K; i++) info_llr[i] <= soft[i];
     end else begin
       out_valid <= 1'b0;
