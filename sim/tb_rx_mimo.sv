@@ -46,6 +46,7 @@ module tb_rx_mimo;
     .h01_re(h01_re), .h01_im(h01_im),
     .h10_re(h10_re), .h10_im(h10_im),
     .h11_re(h11_re), .h11_im(h11_im),
+    .csi_valid(csi_valid),
     .out_valid(out_valid),
     .llr0(llr0), .llr1(llr1),
     .decoded_bits(decoded_bits), .decode_valid(decode_valid), .crc_ok(crc_ok)
@@ -54,7 +55,7 @@ module tb_rx_mimo;
   integer i, s;
   initial begin
     rst_n = 0;
-    approx_en = 0; skip_noncritical = 0; prune_level = 0; in_valid = 0;
+    approx_en = 0; skip_noncritical = 0; prune_level = 0; in_valid = 0; csi_valid = 1;
 
     for (i = 0; i < N_SC; i++) begin
       in_re[i]    = 16'h0120 + i*5; in_im[i]    = 16'h0030 + i*2;
