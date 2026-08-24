@@ -42,8 +42,7 @@ module rx_chain #(
   input  logic [WIDTH-1:0]           h00_re [N_SC], h00_im [N_SC],
   input  logic [WIDTH-1:0]           h01_re [N_SC], h01_im [N_SC],
   input  logic [WIDTH-1:0]           h10_re [N_SC], h10_im [N_SC],
-  input  logic [WIDTH-1:0]           h11_re [N_SC], h11_im [N_SC],
-
+  input  logic                       csi_valid,
   output logic                       out_valid,
   // Soft LLRs for two spatial streams
   output logic [WIDTH-1:0]           llr0   [N_SC],
