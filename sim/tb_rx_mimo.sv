@@ -16,8 +16,7 @@ module tb_rx_mimo;
 
   logic approx_en, skip_noncritical;
   logic [1:0] prune_level;
-  logic in_valid, out_valid;
-
+  logic in_valid, out_valid, csi_valid;
   logic [W-1:0] in_re [N_SC], in_im [N_SC];
   logic [W-1:0] in_re_a1 [N_SC], in_im_a1 [N_SC];
   logic [W-1:0] tw_re [N_ST][N_BF], tw_im [N_ST][N_BF];
