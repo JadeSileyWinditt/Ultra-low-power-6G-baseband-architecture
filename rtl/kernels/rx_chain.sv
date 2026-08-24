@@ -5,7 +5,8 @@
 //   → dual soft demap → polar decoder (N=16, K=8 + CRC-4)
 //
 // All stages respect TBU pruning / approx_en.
-// Full per-SC MIMO array is generated with per-RE CSI (h00..h11 arrays).
+// Per-SC MIMO uses csi_bank for thermal-aware CSI hold + approx quantisation.
+// Fresh CSI when csi_valid=1; under prune_level the same H is reused.
 //==============================================================================
 
 `timescale 1ns / 1ps
@@ -38,16 +39,16 @@ module rx_chain #(
   input  logic [WIDTH-1:0]           h_re   [N_SC],
   input  logic [WIDTH-1:0]           h_im   [N_SC],
 
-  // Per-SC 2×2 channel matrix (one H per resource element)
+  // Per-SC 2×2 channel matrix (fresh CSI)
   input  logic [WIDTH-1:0]           h00_re [N_SC], h00_im [N_SC],
   input  logic [WIDTH-1:0]           h01_re [N_SC], h01_im [N_SC],
   input  logic [WIDTH-1:0]           h10_re [N_SC], h10_im [N_SC],
+  input  logic [WIDTH-1:0]           h11_re [N_SC], h11_im [N_SC],
   input  logic                       csi_valid,
+
   output logic                       out_valid,
-  // Soft LLRs for two spatial streams
   output logic [WIDTH-1:0]           llr0   [N_SC],
   output logic [WIDTH-1:0]           llr1   [N_SC],
-  // Polar decoded information bits (K=8) + CRC status
   output logic [7:0]                 decoded_bits,
   output logic                       decode_valid,
   output logic                       crc_ok
@@ -76,8 +77,6 @@ module rx_chain #(
     .x_re(y0_re), .x_im(y0_im)
   );
 
-  // Antenna-1 path: same H vector is acceptable for the intensity demo;
-  // a production design would carry a second CSI stream.
   symbol_chain #(
     .WIDTH(WIDTH), .N_BUTTERFLIES(N_BUTTERFLIES),
     .N_STAGES(N_STAGES), .N_SC(N_SC)
@@ -95,10 +94,40 @@ module rx_chain #(
   );
 
   //--------------------------------------------------------------------------
-  // Per-SC 2×2 MIMO detect (generated)
+  // CSI bank – thermal-aware hold + approx quantisation
+  //--------------------------------------------------------------------------
+  logic                 csi_out_valid;
+  logic [WIDTH-1:0]     h00_re_h [N_SC], h00_im_h [N_SC];
+  logic [WIDTH-1:0]     h01_re_h [N_SC], h01_im_h [N_SC];
+  logic [WIDTH-1:0]     h10_re_h [N_SC], h10_im_h [N_SC];
+  logic [WIDTH-1:0]     h11_re_h [N_SC], h11_im_h [N_SC];
+  logic [N_SC-1:0]      csi_held;
+
+  csi_bank #(
+    .WIDTH(WIDTH), .N_SC(N_SC), .HOLD_MAX(8)
+  ) u_csi_bank (
+    .clk(clk), .rst_n(rst_n),
+    .approx_en(approx_en),
+    .prune_level(prune_level),
+    .in_valid(sym0_valid & sym1_valid),
+    .h00_re_i(h00_re), .h00_im_i(h00_im),
+    .h01_re_i(h01_re), .h01_im_i(h01_im),
+    .h10_re_i(h10_re), .h10_im_i(h10_im),
+    .h11_re_i(h11_re), .h11_im_i(h11_im),
+    .csi_valid(csi_valid),
+    .out_valid(csi_out_valid),
+    .h00_re(h00_re_h), .h00_im(h00_im_h),
+    .h01_re(h01_re_h), .h01_im(h01_im_h),
+    .h10_re(h10_re_h), .h10_im(h10_im_h),
+    .h11_re(h11_re_h), .h11_im(h11_im_h),
+    .held(csi_held)
+  );
+
+  //--------------------------------------------------------------------------
+  // Per-SC 2×2 MIMO detect – fed by held/truncated CSI
   //--------------------------------------------------------------------------
   logic                 mimo_fire;
-  assign mimo_fire = sym0_valid & sym1_valid & ~skip_noncritical;
+  assign mimo_fire = csi_out_valid & ~skip_noncritical;
 
   logic                 mimo_valid [N_SC];
   logic [WIDTH-1:0]     x0_re [N_SC], x0_im [N_SC];
@@ -113,10 +142,10 @@ module rx_chain #(
         .in_valid(mimo_fire),
         .y0_re(y0_re[gi]), .y0_im(y0_im[gi]),
         .y1_re(y1_re[gi]), .y1_im(y1_im[gi]),
-        .h00_re(h00_re[gi]), .h00_im(h00_im[gi]),
-        .h01_re(h01_re[gi]), .h01_im(h01_im[gi]),
-        .h10_re(h10_re[gi]), .h10_im(h10_im[gi]),
-        .h11_re(h11_re[gi]), .h11_im(h11_im[gi]),
+        .h00_re(h00_re_h[gi]), .h00_im(h00_im_h[gi]),
+        .h01_re(h01_re_h[gi]), .h01_im(h01_im_h[gi]),
+        .h10_re(h10_re_h[gi]), .h10_im(h10_im_h[gi]),
+        .h11_re(h11_re_h[gi]), .h11_im(h11_im_h[gi]),
         .out_valid(mimo_valid[gi]),
         .x0_re(x0_re[gi]), .x0_im(x0_im[gi]),
         .x1_re(x1_re[gi]), .x1_im(x1_im[gi])
@@ -125,7 +154,7 @@ module rx_chain #(
   endgenerate
 
   logic any_mimo_valid;
-  assign any_mimo_valid = mimo_valid[0];   // all fire together
+  assign any_mimo_valid = mimo_valid[0];
 
   //--------------------------------------------------------------------------
   // Soft demap both spatial streams
@@ -154,7 +183,6 @@ module rx_chain #(
 
   //--------------------------------------------------------------------------
   // Polar decoder (N=16 / K=8 + CRC-4)
-  // Pack 16 LLRs from stream-0 bit0 + bit1 (llr0_s0 / llr1_s0)
   //--------------------------------------------------------------------------
   logic [WIDTH-1:0] dec_llr [16];
   always_comb begin
@@ -174,25 +202,22 @@ module rx_chain #(
     .llr(dec_llr),
     .out_valid(decode_valid),
     .info_bits(decoded_bits),
-    .info_llr(),   // unused for now
+    .info_llr(),
     .crc_ok(crc_ok)
   );
 
   //--------------------------------------------------------------------------
-  // Output mux: under skip_noncritical fall back to single-stream EQ path
-  // (stream-0 LLRs only) so the control loop can still prune the MIMO stage.
+  // Output mux
   //--------------------------------------------------------------------------
   always_comb begin
     if (skip_noncritical) begin
       out_valid = sym0_valid;
-      // Pass-through crude LLRs from antenna-0 EQ symbols
       for (int i = 0; i < N_SC; i++) begin
         llr0[i] = y0_re[i];
         llr1[i] = y0_im[i];
       end
     end else begin
       out_valid = demap0_valid & demap1_valid;
-      // Pack stream-0 and stream-1 LLRs (bit0 of each stream into llr0/llr1)
       for (int i = 0; i < N_SC; i++) begin
         llr0[i] = llr0_s0[i];
         llr1[i] = llr0_s1[i];
