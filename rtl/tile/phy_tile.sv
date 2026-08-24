@@ -94,6 +94,7 @@ module phy_tile #(
     .h01_re(h01_re), .h01_im(h01_im),
     .h10_re(h10_re), .h10_im(h10_im),
     .h11_re(h11_re), .h11_im(h11_im),
+    .csi_valid(1'b1),
     .out_valid(rx_valid), .llr0(rx_llr0), .llr1(rx_llr1),
     .decoded_bits(), .decode_valid(), .crc_ok()
   );
