@@ -1,16 +1,12 @@
 //==============================================================================
 // mimo_detect.sv – 2×2 MIMO Zero-Forcing / MMSE-lite detector (approx-aware)
 //
-// For each resource element:
 //   Y = H X + N
-//   X_hat ≈ H^{+} Y     (ZF via adjugate / det, or matched-filter fallback)
+//   ZF   : X̂ ≈ H⁺ Y
+//   MMSE : X̂ ≈ (HᴴH + σ²I)⁻¹ Hᴴ Y     (σ² folded into det as det + noise_var)
 //
-// Under approx_en, multiplies and the reciprocal use truncated arithmetic
-// so the intensity cut remains visible to the TBU control loop.
-//
-// Behavioural RTL: exact reciprocal is replaced by a shift-scale stub;
-// real silicon would use Newton-Raphson or LUT reciprocal under the same
-// approx_en gating.
+// Behavioural reciprocal is a shift-scale stub. Silicon would use NR / LUT
+// under the same approx_en gate.
 //==============================================================================
 
 `timescale 1ns / 1ps
@@ -21,30 +17,26 @@ module mimo_detect #(
   input  logic                       clk,
   input  logic                       rst_n,
   input  logic                       approx_en,
+  input  logic                       mmse_en,
   input  logic                       in_valid,
+  input  logic [WIDTH-1:0]           noise_var,
 
-  // Received vector Y (2 RX antennas), complex
   input  logic [WIDTH-1:0]           y0_re, y0_im,
   input  logic [WIDTH-1:0]           y1_re, y1_im,
 
-  // Channel matrix H (2×2), complex
   input  logic [WIDTH-1:0]           h00_re, h00_im,
   input  logic [WIDTH-1:0]           h01_re, h01_im,
   input  logic [WIDTH-1:0]           h10_re, h10_im,
   input  logic [WIDTH-1:0]           h11_re, h11_im,
 
   output logic                       out_valid,
-  // Detected streams X̂
   output logic [WIDTH-1:0]           x0_re, x0_im,
   output logic [WIDTH-1:0]           x1_re, x1_im
 );
 
-  //--------------------------------------------------------------------------
-  // Intermediate products for det(H) ≈ h00·h11 − h01·h10  (real part only
-  // for the behavioural stub; imag neglected for intensity demonstration)
-  //--------------------------------------------------------------------------
   logic [WIDTH-1:0] p00_11, p01_10, det_re;
-  logic [WIDTH-1:0] inv_det;          // crude reciprocal scale
+  logic [WIDTH-1:0] inv_det;
+  logic [WIDTH-1:0] det_reg;
 
   approx_alu #(.WIDTH(WIDTH), .TRUNC_BITS(2)) u_p00 (
     .clk(clk), .rst_n(rst_n), .opcode(3'd2), .approx_en(approx_en),
@@ -59,25 +51,17 @@ module mimo_detect #(
     .op_a(p00_11), .op_b(p01_10), .result(det_re), .result_valid()
   );
 
-  // Crude inverse: avoid div-by-zero, scale into Q15-ish range
   always_comb begin
-    if (det_re == '0)
-      inv_det = {1'b0, {(WIDTH-1){1'b1}}};   // max positive
+    det_reg = mmse_en ? (det_re + noise_var) : det_re;
+    if (det_reg == '0)
+      inv_det = {1'b0, {(WIDTH-1){1'b1}}};
     else
-      // Shift-based approx reciprocal (behavioural)
-      inv_det = (16'h4000 / (det_re[7:0] ? det_re[7:0] : 8'd1));
+      inv_det = (16'h4000 / (det_reg[7:0] ? det_reg[7:0] : 8'd1));
   end
 
-  //--------------------------------------------------------------------------
-  // Adjugate · Y  (real-focused ZF path)
-  //   x0 ≈  ( h11·y0 − h01·y1 ) · inv_det
-  //   x1 ≈ (−h10·y0 + h00·y1 ) · inv_det
-  // Imag paths follow analogous cross terms.
-  //--------------------------------------------------------------------------
   logic [WIDTH-1:0] t0a, t0b, t0s, t1a, t1b, t1s;
   logic [WIDTH-1:0] t0i_a, t0i_b, t1i_a, t1i_b;
 
-  // Real path for stream 0
   approx_alu #(.WIDTH(WIDTH), .TRUNC_BITS(2)) u_t0a (
     .clk(clk), .rst_n(rst_n), .opcode(3'd2), .approx_en(approx_en),
     .op_a(h11_re), .op_b(y0_re), .result(t0a), .result_valid()
@@ -95,7 +79,6 @@ module mimo_detect #(
     .op_a(t0s), .op_b(inv_det), .result(x0_re), .result_valid()
   );
 
-  // Real path for stream 1
   approx_alu #(.WIDTH(WIDTH), .TRUNC_BITS(2)) u_t1a (
     .clk(clk), .rst_n(rst_n), .opcode(3'd2), .approx_en(approx_en),
     .op_a(h10_re), .op_b(y0_re), .result(t1a), .result_valid()
@@ -113,7 +96,6 @@ module mimo_detect #(
     .op_a(t1s), .op_b(inv_det), .result(x1_re), .result_valid()
   );
 
-  // Imag paths (matched cross-term style for intensity visibility)
   approx_alu #(.WIDTH(WIDTH), .TRUNC_BITS(2)) u_t0ia (
     .clk(clk), .rst_n(rst_n), .opcode(3'd2), .approx_en(approx_en),
     .op_a(h11_im), .op_b(y0_im), .result(t0i_a), .result_valid()
