@@ -81,11 +81,13 @@ module phy_tile #(
   rx_chain #(
     .WIDTH(WIDTH), .N_BUTTERFLIES(N_BUTTERFLIES),
     .N_STAGES(N_STAGES), .N_SC(N_SC)
-  ) u_rx (
+    ) u_rx (
     .clk(clk), .rst_n(rst_n),
-    .approx_en(approx_en), .skip_noncritical(skip_noncritical),
+    .approx_en(approx_en),
+    .mmse_en(1'b1),
+    .noise_var(16'h0010),
+    .skip_noncritical(skip_noncritical),
     .prune_level(prune_level),
-    .in_valid(in_valid & ~mode_tx),
     .in_re(in_re), .in_im(in_im),
     .in_re_a1(in_re_a1), .in_im_a1(in_im_a1),
     .tw_re(tw_re), .tw_im(tw_im),
