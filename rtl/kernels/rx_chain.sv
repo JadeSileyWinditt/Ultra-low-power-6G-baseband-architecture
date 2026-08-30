@@ -21,6 +21,8 @@ module rx_chain #(
   input  logic                       rst_n,
 
   input  logic                       approx_en,
+  input  logic                       mmse_en,
+  input  logic [WIDTH-1:0]           noise_var,
   input  logic                       skip_noncritical,
   input  logic [1:0]                 prune_level,
 
@@ -54,9 +56,6 @@ module rx_chain #(
   output logic                       crc_ok
 );
 
-  //--------------------------------------------------------------------------
-  // Dual FFT → EQ (symbol_chain) – one per antenna
-  //--------------------------------------------------------------------------
   logic                 sym0_valid, sym1_valid;
   logic [WIDTH-1:0]     y0_re [N_SC], y0_im [N_SC];
   logic [WIDTH-1:0]     y1_re [N_SC], y1_im [N_SC];
@@ -93,9 +92,6 @@ module rx_chain #(
     .x_re(y1_re), .x_im(y1_im)
   );
 
-  //--------------------------------------------------------------------------
-  // CSI bank – thermal-aware hold + approx quantisation
-  //--------------------------------------------------------------------------
   logic                 csi_out_valid;
   logic [WIDTH-1:0]     h00_re_h [N_SC], h00_im_h [N_SC];
   logic [WIDTH-1:0]     h01_re_h [N_SC], h01_im_h [N_SC];
@@ -123,9 +119,6 @@ module rx_chain #(
     .held(csi_held)
   );
 
-  //--------------------------------------------------------------------------
-  // Per-SC 2×2 MIMO detect – fed by held/truncated CSI
-  //--------------------------------------------------------------------------
   logic                 mimo_fire;
   assign mimo_fire = csi_out_valid & ~skip_noncritical;
 
@@ -139,6 +132,8 @@ module rx_chain #(
       mimo_detect #(.WIDTH(WIDTH)) u_mimo (
         .clk(clk), .rst_n(rst_n),
         .approx_en(approx_en),
+        .mmse_en(mmse_en),
+        .noise_var(noise_var),
         .in_valid(mimo_fire),
         .y0_re(y0_re[gi]), .y0_im(y0_im[gi]),
         .y1_re(y1_re[gi]), .y1_im(y1_im[gi]),
@@ -156,9 +151,6 @@ module rx_chain #(
   logic any_mimo_valid;
   assign any_mimo_valid = mimo_valid[0];
 
-  //--------------------------------------------------------------------------
-  // Soft demap both spatial streams
-  //--------------------------------------------------------------------------
   logic demap0_valid, demap1_valid;
   logic [WIDTH-1:0] llr0_s0 [N_SC], llr1_s0 [N_SC];
   logic [WIDTH-1:0] llr0_s1 [N_SC], llr1_s1 [N_SC];
@@ -181,14 +173,11 @@ module rx_chain #(
     .llr0(llr0_s1), .llr1(llr1_s1)
   );
 
-  //--------------------------------------------------------------------------
-  // Polar decoder (N=16 / K=8 + CRC-4)
-  //--------------------------------------------------------------------------
   logic [WIDTH-1:0] dec_llr [16];
   always_comb begin
     for (int i = 0; i < N_SC; i++) begin
       dec_llr[2*i]   = llr0_s0[i];
-      dec_llr[2*i+1] = llr1_s0[i];
+      dec_llr[2*i+1] = llr0_s1[i];
     end
   end
 
@@ -206,9 +195,6 @@ module rx_chain #(
     .crc_ok(crc_ok)
   );
 
-  //--------------------------------------------------------------------------
-  // Output mux
-  //--------------------------------------------------------------------------
   always_comb begin
     if (skip_noncritical) begin
       out_valid = sym0_valid;
